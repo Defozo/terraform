@@ -1,5 +1,10 @@
 package terraform
 
+import (
+	"github.com/hashicorp/terraform/plans"
+	"github.com/hashicorp/terraform/states"
+)
+
 // NodePlannableResourceInstanceOrphan represents a resource that is "applyable":
 // it is ready to be applied and is represented by a diff.
 type NodePlannableResourceInstanceOrphan struct {
@@ -35,8 +40,8 @@ func (n *NodePlannableResourceInstanceOrphan) EvalTree() EvalNode {
 
 	// Declare a bunch of variables that are used for state during
 	// evaluation. Most of this are written to by-address below.
-	var diff *InstanceDiff
-	var state *InstanceState
+	var change *plans.ResourceInstanceChange
+	var state *states.ResourceInstanceObject
 
 	return &EvalSequence{
 		Nodes: []EvalNode{
@@ -47,17 +52,17 @@ func (n *NodePlannableResourceInstanceOrphan) EvalTree() EvalNode {
 			&EvalDiffDestroy{
 				Addr:        addr.Resource,
 				State:       &state,
-				Output:      &diff,
+				Output:      &change,
 				OutputState: &state, // Will point to a nil state after this complete, signalling destroyed
 			},
 			&EvalCheckPreventDestroy{
 				Addr:   addr.Resource,
 				Config: n.Config,
-				Diff:   &diff,
+				Change: &change,
 			},
 			&EvalWriteDiff{
-				Name: stateId,
-				Diff: &diff,
+				Name:   stateId,
+				Change: &change,
 			},
 			&EvalWriteState{
 				Name:         stateId,

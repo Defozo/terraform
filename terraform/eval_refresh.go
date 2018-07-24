@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/hashicorp/terraform/addrs"
+	"github.com/hashicorp/terraform/states"
 )
 
 // EvalRefresh is an EvalNode implementation that does a refresh for
@@ -12,16 +13,17 @@ import (
 type EvalRefresh struct {
 	Addr     addrs.ResourceInstance
 	Provider *ResourceProvider
-	State    **InstanceState
-	Output   **InstanceState
+	State    **states.ResourceInstanceObject
+	Output   **states.ResourceInstanceObject
 }
 
 // TODO: test
 func (n *EvalRefresh) Eval(ctx EvalContext) (interface{}, error) {
 	provider := *n.Provider
 	state := *n.State
+	absAddr := n.Addr.Absolute(ctx.Path())
 
-	// The provider and hook APIs still expect our legacy InstanceInfo type.
+	// The provider API still expects our legacy InstanceInfo type.
 	legacyInfo := NewInstanceInfo(n.Addr.Absolute(ctx.Path()))
 
 	// If we have no state, we don't do any refreshing
@@ -32,14 +34,17 @@ func (n *EvalRefresh) Eval(ctx EvalContext) (interface{}, error) {
 
 	// Call pre-refresh hook
 	err := ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PreRefresh(legacyInfo, state)
+		return h.PreRefresh(absAddr, state.Value)
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	// Refresh!
-	state, err = provider.Refresh(legacyInfo, state)
+	priorVal := state.Value
+	// TODO: Shim our new state type into the old one
+	//state, err = provider.Refresh(legacyInfo, state)
+	return nil, fmt.Errorf("EvalRefresh is not yet updated for new state type")
 	if err != nil {
 		return nil, fmt.Errorf("%s: %s", n.Addr.Absolute(ctx.Path()), err.Error())
 	}
@@ -49,7 +54,7 @@ func (n *EvalRefresh) Eval(ctx EvalContext) (interface{}, error) {
 
 	// Call post-refresh hook
 	err = ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostRefresh(legacyInfo, state)
+		return h.PostRefresh(absAddr, priorVal, state.Value)
 	})
 	if err != nil {
 		return nil, err

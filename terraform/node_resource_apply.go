@@ -3,6 +3,10 @@ package terraform
 import (
 	"fmt"
 
+	"github.com/hashicorp/terraform/states"
+
+	"github.com/hashicorp/terraform/plans"
+
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs"
 	"github.com/zclconf/go-cty/cty"
@@ -118,29 +122,24 @@ func (n *NodeApplyableResourceInstance) EvalTree() EvalNode {
 func (n *NodeApplyableResourceInstance) evalTreeDataResource(addr addrs.AbsResourceInstance, stateId string, stateDeps []string) EvalNode {
 	var provider ResourceProvider
 	var providerSchema *ProviderSchema
-	var diff *InstanceDiff
-	var state *InstanceState
+	var change *plans.ResourceInstanceChange
+	var state *states.ResourceInstanceObject
 	var configVal cty.Value
 
 	return &EvalSequence{
 		Nodes: []EvalNode{
 			// Get the saved diff for apply
 			&EvalReadDiff{
-				Name: stateId,
-				Diff: &diff,
+				Name:   stateId,
+				Change: &change,
 			},
 
 			// Stop early if we don't actually have a diff
 			&EvalIf{
 				If: func(ctx EvalContext) (bool, error) {
-					if diff == nil {
+					if change == nil {
 						return true, EvalEarlyExitError{}
 					}
-
-					if diff.GetAttributesLen() == 0 {
-						return true, EvalEarlyExitError{}
-					}
-
 					return true, nil
 				},
 				Then: EvalNoop{},
@@ -159,14 +158,14 @@ func (n *NodeApplyableResourceInstance) evalTreeDataResource(addr addrs.AbsResou
 				Config:         n.Config,
 				Provider:       &provider,
 				ProviderSchema: &providerSchema,
-				Output:         &diff,
+				Output:         &change,
 				OutputValue:    &configVal,
 				OutputState:    &state,
 			},
 
 			&EvalReadDataApply{
 				Addr:     addr.Resource,
-				Diff:     &diff,
+				Change:   &change,
 				Provider: &provider,
 				Output:   &state,
 			},
@@ -182,8 +181,8 @@ func (n *NodeApplyableResourceInstance) evalTreeDataResource(addr addrs.AbsResou
 			// Clear the diff now that we've applied it, so
 			// later nodes won't see a diff that's now a no-op.
 			&EvalWriteDiff{
-				Name: stateId,
-				Diff: nil,
+				Name:   stateId,
+				Change: nil,
 			},
 
 			&EvalUpdateStateHook{},
@@ -196,8 +195,8 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 	// evaluation. Most of this are written to by-address below.
 	var provider ResourceProvider
 	var providerSchema *ProviderSchema
-	var diff, diffApply *InstanceDiff
-	var state *InstanceState
+	var diff, diffApply *plans.ResourceInstanceChange
+	var state *states.ResourceInstanceObject
 	var err error
 	var createNew bool
 	var createBeforeDestroyEnabled bool
@@ -207,8 +206,8 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 		Nodes: []EvalNode{
 			// Get the saved diff for apply
 			&EvalReadDiff{
-				Name: stateId,
-				Diff: &diffApply,
+				Name:   stateId,
+				Change: &diffApply,
 			},
 
 			// We don't want to do any destroys
@@ -218,12 +217,9 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 					if diffApply == nil {
 						return true, EvalEarlyExitError{}
 					}
-
-					if diffApply.GetDestroy() && diffApply.GetAttributesLen() == 0 {
+					if diffApply.Action == plans.Delete {
 						return true, EvalEarlyExitError{}
 					}
-
-					diffApply.SetDestroy(false)
 					return true, nil
 				},
 				Then: EvalNoop{},
@@ -233,13 +229,11 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 				If: func(ctx EvalContext) (bool, error) {
 					destroy := false
 					if diffApply != nil {
-						destroy = diffApply.GetDestroy() || diffApply.RequiresNew()
+						destroy = (diffApply.Action == plans.Delete || diffApply.Action == plans.Replace)
 					}
-
 					if destroy && n.createBeforeDestroy() {
 						createBeforeDestroyEnabled = true
 					}
-
 					return createBeforeDestroyEnabled, nil
 				},
 				Then: &EvalDeposeState{
@@ -265,15 +259,15 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 				Provider:       &provider,
 				ProviderSchema: &providerSchema,
 				State:          &state,
-				OutputDiff:     &diffApply,
+				OutputChange:   &diffApply,
 				OutputValue:    &configVal,
 				OutputState:    &state,
 			},
 
 			// Get the saved diff
 			&EvalReadDiff{
-				Name: stateId,
-				Diff: &diff,
+				Name:   stateId,
+				Change: &diff,
 			},
 
 			// Compare the diffs
@@ -295,14 +289,14 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 
 			// Call pre-apply hook
 			&EvalApplyPre{
-				Addr:  addr.Resource,
-				State: &state,
-				Diff:  &diffApply,
+				Addr:   addr.Resource,
+				State:  &state,
+				Change: &diffApply,
 			},
 			&EvalApply{
 				Addr:      addr.Resource,
 				State:     &state,
-				Diff:      &diffApply,
+				Change:    &diffApply,
 				Provider:  &provider,
 				Output:    &state,
 				Error:     &err,
@@ -344,8 +338,8 @@ func (n *NodeApplyableResourceInstance) evalTreeManagedResource(addr addrs.AbsRe
 			// don't see a diff that is already complete. There
 			// is no longer a diff!
 			&EvalWriteDiff{
-				Name: stateId,
-				Diff: nil,
+				Name:   stateId,
+				Change: nil,
 			},
 
 			&EvalApplyPost{

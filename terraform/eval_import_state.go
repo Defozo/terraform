@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/hashicorp/terraform/states"
+
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/tfdiags"
 )
@@ -12,20 +14,21 @@ import (
 // ImportState operation on a provider. This will return the imported
 // states but won't modify any actual state.
 type EvalImportState struct {
+	Addr     addrs.ResourceInstance
 	Provider *ResourceProvider
-	Info     *InstanceInfo
 	Id       string
-	Output   *[]*InstanceState
+	Output   *[]*states.ImportedObject
 }
 
 // TODO: test
 func (n *EvalImportState) Eval(ctx EvalContext) (interface{}, error) {
+	absAddr := n.Addr.Absolute(ctx.Path())
 	provider := *n.Provider
 
 	{
 		// Call pre-import hook
 		err := ctx.Hook(func(h Hook) (HookAction, error) {
-			return h.PreImportState(n.Info, n.Id)
+			return h.PreImportState(absAddr, n.Id)
 		})
 		if err != nil {
 			return nil, err
@@ -35,16 +38,15 @@ func (n *EvalImportState) Eval(ctx EvalContext) (interface{}, error) {
 	// Import!
 	state, err := provider.ImportState(n.Info, n.Id)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"import %s (id: %s): %s", n.Info.HumanId(), n.Id, err)
+		return nil, fmt.Errorf("import %s (id: %s): %s", absAddr.String(), n.Id, err)
 	}
 
 	for _, s := range state {
 		if s == nil {
-			log.Printf("[TRACE] EvalImportState: import %s %q produced a nil state", n.Info.HumanId(), n.Id)
+			log.Printf("[TRACE] EvalImportState: import %s %q produced a nil state", absAddr.String(), n.Id)
 			continue
 		}
-		log.Printf("[TRACE] EvalImportState: import %s %q produced state for %s with id %q", n.Info.HumanId(), n.Id, s.Ephemeral.Type, s.ID)
+		log.Printf("[TRACE] EvalImportState: import %s %q produced state for %s with id %q", absAddr.String(), n.Id, s.Ephemeral.Type, s.ID)
 	}
 
 	if n.Output != nil {

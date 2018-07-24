@@ -3,11 +3,14 @@ package terraform
 import (
 	"fmt"
 
-	"github.com/hashicorp/terraform/tfdiags"
+	"github.com/hashicorp/terraform/states"
+
+	"github.com/zclconf/go-cty/cty"
 
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs"
-	"github.com/zclconf/go-cty/cty"
+	"github.com/hashicorp/terraform/plans"
+	"github.com/hashicorp/terraform/tfdiags"
 )
 
 // EvalReadDataDiff is an EvalNode implementation that executes a data
@@ -18,13 +21,13 @@ type EvalReadDataDiff struct {
 	Provider       *ResourceProvider
 	ProviderSchema **ProviderSchema
 
-	Output      **InstanceDiff
+	Output      **plans.ResourceInstanceChange
 	OutputValue *cty.Value
-	OutputState **InstanceState
+	OutputState **states.ResourceInstanceObject
 
 	// Set Previous when re-evaluating diff during apply, to ensure that
 	// the "Destroy" flag is preserved.
-	Previous **InstanceDiff
+	Previous **plans.ResourceInstanceChange
 }
 
 func (n *EvalReadDataDiff) Eval(ctx EvalContext) (interface{}, error) {
@@ -130,14 +133,15 @@ func (n *EvalReadDataDiff) Eval(ctx EvalContext) (interface{}, error) {
 type EvalReadDataApply struct {
 	Addr     addrs.ResourceInstance
 	Provider *ResourceProvider
-	Output   **InstanceState
-	Diff     **InstanceDiff
+	Output   **states.ResourceInstanceObject
+	Change   **plans.ResourceInstanceChange
 }
 
 func (n *EvalReadDataApply) Eval(ctx EvalContext) (interface{}, error) {
 	// TODO: test
 	provider := *n.Provider
-	diff := *n.Diff
+	change := *n.Change
+	absAddr := n.Addr.Absolute(ctx.Path())
 
 	// The provider and hook APIs still expect our legacy InstanceInfo type.
 	legacyInfo := NewInstanceInfo(n.Addr.Absolute(ctx.Path()))
@@ -158,7 +162,7 @@ func (n *EvalReadDataApply) Eval(ctx EvalContext) (interface{}, error) {
 	err := ctx.Hook(func(h Hook) (HookAction, error) {
 		// We don't have a state yet, so we'll just give the hook an
 		// empty one to work with.
-		return h.PreRefresh(legacyInfo, &InstanceState{})
+		return h.PreRefresh(absAddr, cty.NullVal(cty.DynamicPseudoType))
 	})
 	if err != nil {
 		return nil, err
@@ -170,7 +174,7 @@ func (n *EvalReadDataApply) Eval(ctx EvalContext) (interface{}, error) {
 	}
 
 	err = ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostRefresh(legacyInfo, state)
+		return h.PostRefresh(absAddr, state)
 	})
 	if err != nil {
 		return nil, err

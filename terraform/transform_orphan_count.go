@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/dag"
+	"github.com/hashicorp/terraform/states"
 )
 
 // OrphanResourceCountTransformer is a GraphTransformer that adds orphans
@@ -19,7 +20,7 @@ type OrphanResourceCountTransformer struct {
 
 	Count int               // Actual count of the resource, or -1 if count is not set at all
 	Addr  addrs.AbsResource // Addr of the resource to look for orphans
-	State *State            // Full global state
+	State *states.State     // Full global state
 }
 
 func (t *OrphanResourceCountTransformer) Transform(g *Graph) error {

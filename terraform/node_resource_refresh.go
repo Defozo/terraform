@@ -3,6 +3,8 @@ package terraform
 import (
 	"fmt"
 
+	"github.com/hashicorp/terraform/states"
+
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/dag"
 	"github.com/hashicorp/terraform/tfdiags"
@@ -37,10 +39,10 @@ func (n *NodeRefreshableManagedResource) DynamicExpand(ctx EvalContext) (*Graph,
 	// if we're transitioning whether "count" is set at all.
 	fixResourceCountSetTransition(ctx, n.ResourceAddr().Resource, count != -1)
 
-	// Grab the state which we read
-	state, lock := ctx.State()
-	lock.RLock()
-	defer lock.RUnlock()
+	// Our graph transformers require access to the full state, so we'll
+	// temporarily lock it while we work on this.
+	state := ctx.State().Lock()
+	defer ctx.State().Unlock()
 
 	// The concrete resource factory we'll use
 	concreteResource := func(a *NodeAbstractResourceInstance) dag.Vertex {
@@ -162,7 +164,7 @@ func (n *NodeRefreshableManagedResourceInstance) evalTreeManagedResource() EvalN
 	// Declare a bunch of variables that are used for state during
 	// evaluation. Most of this are written to by-address below.
 	var provider ResourceProvider
-	var state *InstanceState
+	var state *states.ResourceInstanceObject
 
 	// This happened during initial development. All known cases were
 	// fixed and tested but as a sanity check let's assert here.
